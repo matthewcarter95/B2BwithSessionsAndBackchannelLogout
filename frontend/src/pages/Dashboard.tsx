@@ -1,34 +1,8 @@
 import { Routes, Route, Link, Navigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
-
-// Placeholder components (will be implemented later)
-function Profile() {
-  const { user } = useAuth0();
-  return (
-    <div className="card">
-      <h2>Profile</h2>
-      <pre>{JSON.stringify(user, null, 2)}</pre>
-    </div>
-  );
-}
-
-function Sessions() {
-  return (
-    <div className="card">
-      <h2>Sessions</h2>
-      <p>Session list will be implemented here</p>
-    </div>
-  );
-}
-
-function SessionDetail() {
-  return (
-    <div className="card">
-      <h2>Session Detail</h2>
-      <p>Session details will be shown here</p>
-    </div>
-  );
-}
+import Profile from '../components/Profile';
+import SessionList from '../components/SessionList';
+import SessionDetail from '../components/SessionDetail';
 
 export default function Dashboard() {
   const { user, logout } = useAuth0();
@@ -67,7 +41,7 @@ export default function Dashboard() {
         <Routes>
           <Route path="/" element={<Navigate to="/profile" replace />} />
           <Route path="/profile" element={<Profile />} />
-          <Route path="/sessions" element={<Sessions />} />
+          <Route path="/sessions" element={<SessionList />} />
           <Route path="/sessions/:sid" element={<SessionDetail />} />
         </Routes>
       </div>

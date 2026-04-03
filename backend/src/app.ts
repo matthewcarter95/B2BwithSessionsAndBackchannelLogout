@@ -6,6 +6,7 @@ import { config } from './config';
 import { requestLogger, bodyLogger } from './middleware/logging';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import logoutRoutes from './routes/logout';
+import sessionRoutes from './routes/sessions';
 
 const app: Application = express();
 
@@ -62,7 +63,7 @@ app.get('/', (req: Request, res: Response) => {
 
 // API Routes
 app.use('/logout', logoutRoutes);
-// app.use('/sessions', sessionRoutes); // To be implemented
+app.use('/sessions', sessionRoutes);
 
 // 404 handler
 app.use(notFoundHandler);
