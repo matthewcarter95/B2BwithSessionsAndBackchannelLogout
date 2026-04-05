@@ -78,7 +78,7 @@ export function sanitizeForLog(obj: any): any {
 /**
  * Body logging middleware (with sanitization)
  */
-export function bodyLogger(req: Request, res: Response, next: NextFunction): void {
+export function bodyLogger(req: Request, _res: Response, next: NextFunction): void {
   if (req.body && Object.keys(req.body).length > 0) {
     console.log('📦 Request body:', sanitizeForLog(req.body));
   }

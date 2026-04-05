@@ -59,6 +59,7 @@ router.post('/backchannel', async (req: Request, res: Response) => {
     }
 
     // Step 2: Get session from DynamoDB
+    // Note: Auth0 sends "sid" but DynamoDB table uses "session_id"
     const session = await getSession(sid);
 
     if (!session) {
@@ -73,10 +74,11 @@ router.post('/backchannel', async (req: Request, res: Response) => {
     }
 
     console.log('📦 Session found:', {
-      sid: session.sid,
-      userId: session.userId,
-      email: session.email,
-      loginTime: new Date(session.loginTime * 1000).toISOString(),
+      session_id: session.session_id,
+      user_id: session.user_id,
+      email: session.email || 'N/A',
+      last_activity: session.last_activity ? new Date(session.last_activity * 1000).toISOString() : 'N/A',
+      expires_at: session.expires_at ? new Date(session.expires_at * 1000).toISOString() : 'N/A',
     });
 
     // Step 3: Delete session from DynamoDB
@@ -104,7 +106,8 @@ router.post('/backchannel', async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       sid,
-      userId: session.userId,
+      session_id: session.session_id,
+      user_id: session.user_id,
       processedAt: new Date().toISOString(),
       duration: `${duration}ms`,
     });
@@ -129,7 +132,7 @@ router.post('/backchannel', async (req: Request, res: Response) => {
  * Returns information about the backchannel logout configuration.
  * Useful for debugging and verification.
  */
-router.get('/backchannel', (req: Request, res: Response) => {
+router.get('/backchannel', (_req: Request, res: Response) => {
   res.json({
     endpoint: '/logout/backchannel',
     method: 'POST',

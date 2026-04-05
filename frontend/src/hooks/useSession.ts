@@ -4,7 +4,6 @@ import apiClient from '../utils/apiClient';
 import axios from 'axios';
 
 const LAMBDA_FUNCTION_URL = import.meta.env.VITE_LAMBDA_FUNCTION_URL || '';
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
 
 // Types
 export interface Session {
@@ -16,6 +15,35 @@ export interface Session {
   lastActivityAt: number;
   ipAddress?: string;
   userAgent?: string;
+}
+
+// Lambda API response type
+interface LambdaSession {
+  session_id: string;
+  user_id: string;
+  expires_at: number;
+  last_activity: number;
+  status: string;
+  email?: string;
+  ip_address?: string;
+  user_agent?: string;
+  login_time?: number;
+}
+
+/**
+ * Map Lambda API response to frontend Session format
+ */
+function mapLambdaSession(lambdaSession: LambdaSession): Session {
+  return {
+    sid: lambdaSession.session_id,
+    userId: lambdaSession.user_id,
+    email: lambdaSession.email || 'N/A',
+    loginTime: lambdaSession.login_time || lambdaSession.last_activity, // Fallback to last_activity if no login_time
+    expiresAt: lambdaSession.expires_at,
+    lastActivityAt: lambdaSession.last_activity,
+    ipAddress: lambdaSession.ip_address,
+    userAgent: lambdaSession.user_agent,
+  };
 }
 
 export interface Auth0Session {
@@ -47,14 +75,29 @@ export function useSessions(userId?: string) {
       // Get access token for authentication
       const token = await getAccessTokenSilently();
 
-      // Call Lambda Function URL
-      const response = await axios.get(`${LAMBDA_FUNCTION_URL}?userId=${userId}`, {
+      // URL encode the user_id (important for pipe characters like auth0|123)
+      const encodedUserId = encodeURIComponent(userId);
+
+      // Call Lambda Function URL with proper parameter name and encoding
+      const response = await axios.get(`${LAMBDA_FUNCTION_URL}?user_id=${encodedUserId}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
 
-      return response.data.sessions as Session[];
+      console.log('Lambda API Response:', response.data);
+
+      // Handle different response structures
+      const lambdaSessions = response.data.sessions || response.data || [];
+      console.log('Raw Lambda sessions:', lambdaSessions);
+
+      // Map Lambda sessions to frontend Session format
+      const sessions = lambdaSessions.map((lambdaSession: LambdaSession) =>
+        mapLambdaSession(lambdaSession)
+      );
+      console.log('Mapped sessions:', sessions);
+
+      return sessions;
     },
     enabled: isAuthenticated && !!userId && !!LAMBDA_FUNCTION_URL,
     staleTime: 5 * 1000, // 5 seconds
@@ -222,7 +265,8 @@ export function maskIpAddress(ip?: string): string {
 /**
  * Truncate session ID for display
  */
-export function truncateSessionId(sid: string, length = 12): string {
+export function truncateSessionId(sid: string | undefined, length = 12): string {
+  if (!sid) return 'N/A';
   if (sid.length <= length) return sid;
   return `${sid.substring(0, length)}...`;
 }

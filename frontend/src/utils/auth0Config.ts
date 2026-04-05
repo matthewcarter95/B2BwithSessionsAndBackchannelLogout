@@ -1,6 +1,4 @@
-import { Auth0ProviderOptions } from '@auth0/auth0-react';
-
-export const auth0Config: Auth0ProviderOptions = {
+export const auth0Config = {
   domain: import.meta.env.VITE_AUTH0_DOMAIN || '',
   clientId: import.meta.env.VITE_AUTH0_CLIENT_ID || '',
   authorizationParams: {
@@ -9,7 +7,7 @@ export const auth0Config: Auth0ProviderOptions = {
     scope: 'openid profile email',
   },
   useRefreshTokens: true,
-  cacheLocation: 'localstorage',
+  cacheLocation: 'localstorage' as const,
 };
 
 // Validate Auth0 configuration

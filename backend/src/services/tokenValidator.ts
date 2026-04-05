@@ -49,10 +49,25 @@ function decodeToken(token: string): DecodedToken {
       throw new Error('Invalid token format');
     }
 
-    return decoded as DecodedToken;
+    return decoded as unknown as DecodedToken;
   } catch (error) {
     throw new Error('Failed to decode token');
   }
+}
+
+/**
+ * Get all possible issuer values
+ * Includes both Auth0 domain and custom domain, with and without trailing slash
+ */
+function getPossibleIssuers(): [string, ...string[]] {
+  const customDomain = process.env.AUTH0_CUSTOM_DOMAIN || 'adp-auth.demo-connect.us';
+
+  return [
+    `https://${config.auth0.domain}/`,
+    `https://${config.auth0.domain}`,
+    `https://${customDomain}/`,
+    `https://${customDomain}`
+  ];
 }
 
 /**
@@ -68,7 +83,7 @@ async function verifyToken(
       publicKey,
       {
         algorithms: ['RS256'],
-        issuer: `https://${config.auth0.domain}/`,
+        issuer: getPossibleIssuers(),
         audience: config.auth0.clientId,
       },
       (err, decoded) => {
@@ -103,10 +118,13 @@ function validateLogoutTokenClaims(payload: LogoutTokenPayload): void {
     throw new Error('Missing events claim');
   }
 
-  // Validate issuer
-  const expectedIssuer = `https://${config.auth0.domain}/`;
-  if (payload.iss !== expectedIssuer) {
-    throw new Error(`Invalid issuer. Expected ${expectedIssuer}, got ${payload.iss}`);
+  // Debug: Log the events claim structure
+  console.log('🔍 Events claim structure:', JSON.stringify(payload.events, null, 2));
+
+  // Validate issuer - accept multiple possible formats
+  const possibleIssuers = getPossibleIssuers();
+  if (!possibleIssuers.includes(payload.iss)) {
+    throw new Error(`Invalid issuer. Expected one of [${possibleIssuers.join(', ')}], got ${payload.iss}`);
   }
 
   // Validate audience
@@ -127,12 +145,14 @@ function validateLogoutTokenClaims(payload: LogoutTokenPayload): void {
     throw new Error('Token issued in the future');
   }
 
-  // Validate events claim structure
+  // Validate events claim structure - Auth0 uses the correct OIDC event type URI
   const backchannelEvent =
+    payload.events['http://schemas.openid.net/event/backchannel-logout'] ||
     payload.events['http://openid.net/specs/openid-connect-backchannel-1_0.html#event'];
 
   if (!backchannelEvent) {
-    throw new Error('Missing backchannel logout event in events claim');
+    const eventKeys = Object.keys(payload.events);
+    throw new Error(`Missing backchannel logout event in events claim. Found keys: ${eventKeys.join(', ')}`);
   }
 }
 
@@ -140,14 +160,23 @@ function validateLogoutTokenClaims(payload: LogoutTokenPayload): void {
  * Extract session ID (sid) from logout token
  */
 export function extractSid(payload: LogoutTokenPayload): string {
+  // Try the correct OIDC event type first, then fall back to the spec URL
   const backchannelEvent =
+    payload.events['http://schemas.openid.net/event/backchannel-logout'] ||
     payload.events['http://openid.net/specs/openid-connect-backchannel-1_0.html#event'];
 
-  if (!backchannelEvent || !backchannelEvent.sid) {
-    throw new Error('Missing sid in backchannel logout event');
+  if (!backchannelEvent) {
+    throw new Error('Missing backchannel logout event in events claim');
   }
 
-  return backchannelEvent.sid;
+  // The sid can be in the event object or directly in the payload
+  const sid = backchannelEvent.sid || payload.sid;
+
+  if (!sid) {
+    throw new Error('Missing sid in backchannel logout event or token payload');
+  }
+
+  return sid;
 }
 
 /**

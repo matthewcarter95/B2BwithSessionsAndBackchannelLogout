@@ -29,11 +29,13 @@ router.get('/:sessionId', async (req: Request, res: Response) => {
     return res.status(200).json(sessionInfo);
   } catch (error) {
     console.error('❌ Failed to get session details:', error);
+    console.error('❌ Error stack:', (error as Error).stack);
 
     return res.status(500).json({
       error: 'server_error',
       message: 'Failed to retrieve session details',
       details: (error as Error).message,
+      stack: process.env.NODE_ENV === 'development' ? (error as Error).stack : undefined,
     });
   }
 });

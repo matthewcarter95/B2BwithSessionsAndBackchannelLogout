@@ -1,17 +1,20 @@
 import { Request } from 'express';
 
 // Session types
+// Note: DynamoDB table uses snake_case attribute names
 export interface Session {
-  sid: string;
-  userId: string;
-  email: string;
-  tenantId?: string;
-  sessionData: Record<string, any>;
-  loginTime: number;
-  expiresAt: number;
-  lastActivityAt: number;
-  ipAddress?: string;
-  userAgent?: string;
+  session_id: string; // Maps to DynamoDB session_id (partition key)
+  user_id: string; // Maps to DynamoDB user_id (GSI key)
+  expires_at?: number; // Unix timestamp
+  last_activity?: number; // Unix timestamp (note: field name is last_activity, not last_activity_at)
+  status?: string;
+  // Optional fields that may exist in sessions
+  email?: string;
+  tenant_id?: string;
+  session_data?: Record<string, any>;
+  login_time?: number;
+  ip_address?: string;
+  user_agent?: string;
 }
 
 // Auth0 types
@@ -50,10 +53,15 @@ export interface LogoutTokenPayload {
   aud: string | string[];
   iat: number;
   exp: number;
+  sid?: string; // Can be at top level or in events
   events: {
-    'http://openid.net/specs/openid-connect-backchannel-1_0.html#event': {
+    'http://schemas.openid.net/event/backchannel-logout'?: {
       sid?: string;
     };
+    'http://openid.net/specs/openid-connect-backchannel-1_0.html#event'?: {
+      sid?: string;
+    };
+    [key: string]: any; // Allow other event types
   };
 }
 

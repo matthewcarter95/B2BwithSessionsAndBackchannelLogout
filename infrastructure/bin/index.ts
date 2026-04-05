@@ -11,7 +11,7 @@ const app = new cdk.App();
 // Get environment configuration
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
-  region: process.env.CDK_DEFAULT_REGION || 'us-east-1',
+  region: process.env.CDK_DEFAULT_REGION || 'us-west-2',
 };
 
 const projectName = 'B2B';
@@ -28,13 +28,13 @@ const databaseStack = new DatabaseStack(app, `${projectName}DatabaseStack`, {
   description: 'DynamoDB tables for B2B Application',
 });
 
-// Stack 3: Lambda (Session API)
-const lambdaStack = new LambdaStack(app, `${projectName}LambdaStack`, {
-  env,
-  description: 'Lambda functions for B2B Application',
-  vpc: networkingStack.vpc,
-  sessionsTable: databaseStack.sessionsTable,
-});
+// Stack 3: Lambda (Session API) - SKIPPED, using existing Lambda
+// const lambdaStack = new LambdaStack(app, `${projectName}LambdaStack`, {
+//   env,
+//   description: 'Lambda functions for B2B Application',
+//   vpc: networkingStack.vpc,
+//   sessionsTable: databaseStack.sessionsTable,
+// });
 
 // Stack 4: Compute (ECS, ALB)
 const computeStack = new ComputeStack(app, `${projectName}ComputeStack`, {
@@ -42,11 +42,13 @@ const computeStack = new ComputeStack(app, `${projectName}ComputeStack`, {
   description: 'ECS Cluster, Service, and Load Balancer for B2B Application',
   vpc: networkingStack.vpc,
   sessionsTable: databaseStack.sessionsTable,
+  albSecurityGroup: networkingStack.albSecurityGroup,
+  ecsSecurityGroup: networkingStack.ecsSecurityGroup,
 });
 
 // Add dependencies
-lambdaStack.addDependency(networkingStack);
-lambdaStack.addDependency(databaseStack);
+// lambdaStack.addDependency(networkingStack);
+// lambdaStack.addDependency(databaseStack);
 computeStack.addDependency(networkingStack);
 computeStack.addDependency(databaseStack);
 

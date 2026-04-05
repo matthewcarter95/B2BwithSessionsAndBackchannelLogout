@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosRequestConfig, AxiosError } from 'axios';
+import axios, { AxiosInstance, AxiosError } from 'axios';
 
 const baseURL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3000';
 

@@ -8,7 +8,7 @@ import * as path from 'path';
 
 interface LambdaStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
-  sessionsTable: dynamodb.Table;
+  sessionsTable: dynamodb.ITable;
 }
 
 export class LambdaStack extends cdk.Stack {

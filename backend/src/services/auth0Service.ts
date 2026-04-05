@@ -138,6 +138,8 @@ export async function getSessionInfo(sessionId: string): Promise<Auth0Session | 
   try {
     const token = await getM2MToken();
 
+    console.log(`🔍 Calling Auth0 Sessions API: https://${config.auth0.domain}/api/v2/sessions/${sessionId}`);
+
     const response = await axios.get<Auth0Session>(
       `https://${config.auth0.domain}/api/v2/sessions/${sessionId}`,
       {
@@ -157,11 +159,15 @@ export async function getSessionInfo(sessionId: string): Promise<Auth0Session | 
 
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
+      console.error('❌ Status:', axiosError.response?.status);
+      console.error('❌ Response data:', JSON.stringify(axiosError.response?.data, null, 2));
+
       if (axiosError.response?.status === 404) {
         console.log('Session not found:', sessionId);
         return null;
       } else if (axiosError.response?.status === 401) {
         // Token expired, refresh and retry
+        console.log('🔄 Token expired, retrying with fresh token...');
         const token = await getM2MToken(true);
 
         const retryResponse = await axios.get<Auth0Session>(
@@ -176,6 +182,8 @@ export async function getSessionInfo(sessionId: string): Promise<Auth0Session | 
         );
 
         return retryResponse.data;
+      } else if (axiosError.response?.status === 403) {
+        throw new Error(`Auth0 API access forbidden. Check M2M application scopes. Response: ${JSON.stringify(axiosError.response?.data)}`);
       }
     }
 

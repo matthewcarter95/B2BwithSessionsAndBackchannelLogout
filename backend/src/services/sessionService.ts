@@ -19,19 +19,19 @@ const dynamoClient = new DynamoDBClient({
 const TABLE_NAME = config.aws.dynamoTableName;
 
 /**
- * Get session by sid
+ * Get session by session_id
  */
-export async function getSession(sid: string): Promise<Session | null> {
+export async function getSession(sessionId: string): Promise<Session | null> {
   try {
     const command = new GetItemCommand({
       TableName: TABLE_NAME,
-      Key: marshall({ sid }),
+      Key: marshall({ session_id: sessionId }),
     });
 
     const response = await dynamoClient.send(command);
 
     if (!response.Item) {
-      console.log(`Session not found: ${sid}`);
+      console.log(`Session not found: ${sessionId}`);
       return null;
     }
 
@@ -39,8 +39,8 @@ export async function getSession(sid: string): Promise<Session | null> {
 
     // Check if session is expired
     const now = Math.floor(Date.now() / 1000);
-    if (session.expiresAt < now) {
-      console.log(`Session expired: ${sid}`);
+    if (session.expires_at && session.expires_at < now) {
+      console.log(`Session expired: ${sessionId}`);
       return null;
     }
 
@@ -54,15 +54,16 @@ export async function getSession(sid: string): Promise<Session | null> {
 /**
  * Create new session
  */
-export async function createSession(sessionData: Omit<Session, 'loginTime' | 'expiresAt' | 'lastActivityAt'>): Promise<Session> {
+export async function createSession(sessionData: Pick<Session, 'session_id' | 'user_id'> & Partial<Session>): Promise<Session> {
   const now = Math.floor(Date.now() / 1000);
   const twentyFourHoursLater = now + 24 * 60 * 60; // 24 hours from now
 
   const session: Session = {
     ...sessionData,
-    loginTime: now,
-    expiresAt: twentyFourHoursLater,
-    lastActivityAt: now,
+    login_time: sessionData.login_time || now,
+    expires_at: sessionData.expires_at || twentyFourHoursLater,
+    last_activity: sessionData.last_activity || now,
+    status: sessionData.status || 'active',
   };
 
   try {
@@ -70,21 +71,21 @@ export async function createSession(sessionData: Omit<Session, 'loginTime' | 'ex
       TableName: TABLE_NAME,
       Item: marshall(session, { removeUndefinedValues: true }),
       // Prevent overwriting existing session
-      ConditionExpression: 'attribute_not_exists(sid)',
+      ConditionExpression: 'attribute_not_exists(session_id)',
     });
 
     await dynamoClient.send(command);
 
     console.log('✅ Session created:', {
-      sid: session.sid,
-      userId: session.userId,
-      expiresAt: new Date(session.expiresAt * 1000).toISOString(),
+      session_id: session.session_id,
+      user_id: session.user_id,
+      expires_at: session.expires_at ? new Date(session.expires_at * 1000).toISOString() : 'N/A',
     });
 
     return session;
   } catch (error: any) {
     if (error.name === 'ConditionalCheckFailedException') {
-      console.warn('Session already exists:', sessionData.sid);
+      console.warn('Session already exists:', sessionData.session_id);
       throw new Error('Session already exists');
     }
 
@@ -94,36 +95,36 @@ export async function createSession(sessionData: Omit<Session, 'loginTime' | 'ex
 }
 
 /**
- * Delete session by sid
+ * Delete session by session_id
  */
-export async function deleteSession(sid: string): Promise<boolean> {
+export async function deleteSession(sessionId: string): Promise<boolean> {
   try {
     // First, get the session to return its data
-    const session = await getSession(sid);
+    const session = await getSession(sessionId);
 
     if (!session) {
-      console.log(`Session not found for deletion: ${sid}`);
+      console.log(`Session not found for deletion: ${sessionId}`);
       return false;
     }
 
     const command = new DeleteItemCommand({
       TableName: TABLE_NAME,
-      Key: marshall({ sid }),
+      Key: marshall({ session_id: sessionId }),
       // Ensure we only delete if it exists
-      ConditionExpression: 'attribute_exists(sid)',
+      ConditionExpression: 'attribute_exists(session_id)',
     });
 
     await dynamoClient.send(command);
 
     console.log('✅ Session deleted:', {
-      sid,
-      userId: session.userId,
+      session_id: sessionId,
+      user_id: session.user_id,
     });
 
     return true;
   } catch (error: any) {
     if (error.name === 'ConditionalCheckFailedException') {
-      console.warn('Session already deleted:', sid);
+      console.warn('Session already deleted:', sessionId);
       return false;
     }
 
@@ -133,7 +134,7 @@ export async function deleteSession(sid: string): Promise<boolean> {
 }
 
 /**
- * List sessions by userId using GSI
+ * List sessions by user_id using GSI
  */
 export async function listSessionsByUserId(
   userId: string,
@@ -150,13 +151,12 @@ export async function listSessionsByUserId(
 
     const command = new QueryCommand({
       TableName: TABLE_NAME,
-      IndexName: 'userId-expiresAt-index',
-      KeyConditionExpression: 'userId = :userId AND expiresAt > :now',
+      IndexName: 'user_id-index',
+      KeyConditionExpression: 'user_id = :user_id',
       ExpressionAttributeValues: marshall({
-        ':userId': userId,
-        ':now': now,
+        ':user_id': userId,
       }),
-      ScanIndexForward: false, // Sort by expiresAt descending (newest first)
+      ScanIndexForward: false, // Newest first
       Limit: options?.limit || 20,
       ...(options?.exclusiveStartKey && {
         ExclusiveStartKey: marshall(options.exclusiveStartKey),
@@ -165,7 +165,10 @@ export async function listSessionsByUserId(
 
     const response = await dynamoClient.send(command);
 
-    const sessions = (response.Items || []).map((item) => unmarshall(item) as Session);
+    // Filter out expired sessions
+    const sessions = (response.Items || [])
+      .map((item) => unmarshall(item) as Session)
+      .filter((session) => !session.expires_at || session.expires_at > now);
 
     return {
       sessions,
@@ -182,26 +185,26 @@ export async function listSessionsByUserId(
 /**
  * Update session activity timestamp
  */
-export async function updateSessionActivity(sid: string): Promise<void> {
+export async function updateSessionActivity(sessionId: string): Promise<void> {
   try {
     const now = Math.floor(Date.now() / 1000);
 
     const command = new UpdateItemCommand({
       TableName: TABLE_NAME,
-      Key: marshall({ sid }),
-      UpdateExpression: 'SET lastActivityAt = :now',
+      Key: marshall({ session_id: sessionId }),
+      UpdateExpression: 'SET last_activity = :now',
       ExpressionAttributeValues: marshall({
         ':now': now,
       }),
-      ConditionExpression: 'attribute_exists(sid)',
+      ConditionExpression: 'attribute_exists(session_id)',
     });
 
     await dynamoClient.send(command);
 
-    console.log('✅ Session activity updated:', sid);
+    console.log('✅ Session activity updated:', sessionId);
   } catch (error: any) {
     if (error.name === 'ConditionalCheckFailedException') {
-      console.warn('Session does not exist:', sid);
+      console.warn('Session does not exist:', sessionId);
       return;
     }
 
@@ -218,10 +221,10 @@ export async function getAllSessionsByUserId(userId: string): Promise<Session[]>
   try {
     const command = new QueryCommand({
       TableName: TABLE_NAME,
-      IndexName: 'userId-expiresAt-index',
-      KeyConditionExpression: 'userId = :userId',
+      IndexName: 'user_id-index',
+      KeyConditionExpression: 'user_id = :user_id',
       ExpressionAttributeValues: marshall({
-        ':userId': userId,
+        ':user_id': userId,
       }),
       ScanIndexForward: false,
     });
@@ -239,14 +242,14 @@ export async function getAllSessionsByUserId(userId: string): Promise<Session[]>
  * Sanitize session data for API response (remove sensitive fields)
  */
 export function sanitizeSession(session: Session): Partial<Session> {
-  const { sessionData, ...sanitized } = session;
+  const { session_data, ...sanitized } = session;
 
   return {
     ...sanitized,
     // Only include non-sensitive session data
-    sessionData: {
-      email: sessionData.email,
-      name: sessionData.name,
+    session_data: {
+      email: session_data?.email,
+      name: session_data?.name,
       // Don't include full token claims
     },
   };
@@ -260,7 +263,7 @@ export async function checkConnection(): Promise<boolean> {
     // Try to get a non-existent item to test connection
     const command = new GetItemCommand({
       TableName: TABLE_NAME,
-      Key: marshall({ sid: 'health-check' }),
+      Key: marshall({ session_id: 'health-check' }),
     });
 
     await dynamoClient.send(command);

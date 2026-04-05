@@ -6,11 +6,14 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
 import { Construct } from 'constructs';
 
 interface ComputeStackProps extends cdk.StackProps {
   vpc: ec2.Vpc;
-  sessionsTable: dynamodb.Table;
+  sessionsTable: dynamodb.ITable;
+  albSecurityGroup: ec2.SecurityGroup;
+  ecsSecurityGroup: ec2.SecurityGroup;
 }
 
 export class ComputeStack extends cdk.Stack {
@@ -21,22 +24,7 @@ export class ComputeStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
 
-    const { vpc, sessionsTable } = props;
-
-    // Import ALB security group from networking stack
-    const albSecurityGroup = ec2.SecurityGroup.fromLookupByName(
-      this,
-      'ALBSecurityGroup',
-      'b2b-alb-sg',
-      vpc
-    );
-
-    const ecsSecurityGroup = ec2.SecurityGroup.fromLookupByName(
-      this,
-      'ECSSecurityGroup',
-      'b2b-ecs-sg',
-      vpc
-    );
+    const { vpc, sessionsTable, albSecurityGroup, ecsSecurityGroup } = props;
 
     // Create ECS Cluster
     this.cluster = new ecs.Cluster(this, 'Cluster', {
@@ -68,6 +56,17 @@ export class ComputeStack extends cdk.Stack {
     // Grant DynamoDB permissions to task role
     sessionsTable.grantReadWriteData(taskRole);
 
+    // Grant explicit permissions for GSI queries (needed when importing table)
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ['dynamodb:Query'],
+        resources: [
+          `arn:aws:dynamodb:${this.region}:${this.account}:table/Auth0Sessions/index/*`,
+        ],
+      })
+    );
+
     // Grant Secrets Manager permissions (for Auth0 credentials)
     taskRole.addToPolicy(
       new iam.PolicyStatement({
@@ -91,8 +90,8 @@ export class ComputeStack extends cdk.Stack {
     // Add container
     const container = taskDefinition.addContainer('backend', {
       containerName: 'express-server',
-      // Image will be updated after Docker build and push
-      image: ecs.ContainerImage.fromRegistry('amazon/amazon-ecs-sample'),
+      // Use backend image from ECR
+      image: ecs.ContainerImage.fromRegistry('204352680806.dkr.ecr.us-west-2.amazonaws.com/b2b-backend:latest'),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: 'fargate',
         logGroup,
@@ -101,12 +100,14 @@ export class ComputeStack extends cdk.Stack {
         NODE_ENV: 'production',
         PORT: '3000',
         AWS_REGION: this.region,
-        DYNAMODB_TABLE_NAME: sessionsTable.tableName,
-        // Auth0 config will be loaded from Secrets Manager in production
-        // For now, set placeholder values
-        AUTH0_DOMAIN: 'REPLACE_ME',
-        AUTH0_CLIENT_ID: 'REPLACE_ME',
-        CORS_ORIGIN: 'REPLACE_ME',
+        DYNAMODB_TABLE_NAME: 'Auth0Sessions',
+        // Auth0 configuration
+        AUTH0_DOMAIN: 'fiscal-psft.cic-demo-platform.auth0app.com',
+        AUTH0_CLIENT_ID: '1RjG2svPN9c6O2bGHDEGxvc2WxCd6ewI',
+        AUTH0_M2M_CLIENT_ID: 'yXEDcSCqsHUVxEfETz8V6eSNFVuwa8jr',
+        AUTH0_M2M_CLIENT_SECRET: 'sqqk_tBNLOCDNCb1Y4EXxX7k8V-LPeHGwq1ZYaZ2Ij1SaZ2UlBv4MY08GzLGoHSY',
+        AUTH0_AUDIENCE: 'https://fiscal-psft.cic-demo-platform.auth0app.com/api/v2/',
+        CORS_ORIGIN: 'https://adp-spa.demo-connect.us',
       },
       // Secrets from Secrets Manager
       // secrets: {
@@ -114,7 +115,7 @@ export class ComputeStack extends cdk.Stack {
       //   AUTH0_M2M_CLIENT_SECRET: ecs.Secret.fromSecretsManager(auth0Secret, 'client_secret'),
       // },
       healthCheck: {
-        command: ['CMD-SHELL', 'curl -f http://localhost:3000/health || exit 1'],
+        command: ['CMD-SHELL', "node -e \"require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})\""],
         interval: cdk.Duration.seconds(30),
         timeout: cdk.Duration.seconds(5),
         retries: 3,
@@ -148,20 +149,39 @@ export class ComputeStack extends cdk.Stack {
       targetType: elbv2.TargetType.IP,
       healthCheck: {
         path: '/health',
-        interval: cdk.Duration.seconds(30),
+        interval: cdk.Duration.seconds(15),  // Faster health checks
         timeout: cdk.Duration.seconds(5),
-        healthyThresholdCount: 2,
-        unhealthyThresholdCount: 3,
+        healthyThresholdCount: 2,  // 2 × 15s = 30s to become healthy
+        unhealthyThresholdCount: 2,  // Fail faster
         healthyHttpCodes: '200',
       },
       deregistrationDelay: cdk.Duration.seconds(30),
     });
 
-    // Add HTTP listener (redirect to HTTPS in production)
+    // Import ACM certificate
+    const certificate = certificatemanager.Certificate.fromCertificateArn(
+      this,
+      'Certificate',
+      'arn:aws:acm:us-west-2:204352680806:certificate/8c19113f-425f-4185-a2e9-fb2dcc5f86c4'
+    );
+
+    // Add HTTPS listener
+    this.alb.addListener('HttpsListener', {
+      port: 443,
+      protocol: elbv2.ApplicationProtocol.HTTPS,
+      certificates: [certificate],
+      defaultAction: elbv2.ListenerAction.forward([targetGroup]),
+    });
+
+    // Add HTTP listener that redirects to HTTPS
     this.alb.addListener('HttpListener', {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
-      defaultAction: elbv2.ListenerAction.forward([targetGroup]),
+      defaultAction: elbv2.ListenerAction.redirect({
+        protocol: 'HTTPS',
+        port: '443',
+        permanent: true,
+      }),
     });
 
     // Create Fargate Service
@@ -169,7 +189,7 @@ export class ComputeStack extends cdk.Stack {
       serviceName: 'b2b-backend-service',
       cluster: this.cluster,
       taskDefinition,
-      desiredCount: 2,
+      desiredCount: 1,  // Start with 1 task for faster deployment
       securityGroups: [ecsSecurityGroup],
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -178,7 +198,7 @@ export class ComputeStack extends cdk.Stack {
       circuitBreaker: {
         rollback: true,
       },
-      healthCheckGracePeriod: cdk.Duration.seconds(60),
+      healthCheckGracePeriod: cdk.Duration.seconds(180),  // 3 minutes grace period
     });
 
     // Attach service to target group
@@ -222,12 +242,17 @@ export class ComputeStack extends cdk.Stack {
     });
 
     new cdk.CfnOutput(this, 'LoadBalancerUrl', {
-      value: `http://${this.alb.loadBalancerDnsName}`,
-      description: 'Application Load Balancer URL',
+      value: `https://adp-backend.demo-connect.us`,
+      description: 'Backend API URL (HTTPS)',
+    });
+
+    new cdk.CfnOutput(this, 'LoadBalancerDNSforCNAME', {
+      value: this.alb.loadBalancerDnsName,
+      description: 'Point adp-backend.demo-connect.us CNAME to this DNS name',
     });
 
     new cdk.CfnOutput(this, 'BackchannelLogoutUrl', {
-      value: `http://${this.alb.loadBalancerDnsName}/logout/backchannel`,
+      value: `https://adp-backend.demo-connect.us/logout/backchannel`,
       description: 'Backchannel Logout Endpoint URL (configure in Auth0)',
     });
 
