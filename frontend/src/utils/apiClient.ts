@@ -38,11 +38,23 @@ apiClient.interceptors.response.use(
 
       switch (status) {
         case 401:
-          console.error('Unauthorized - token may be expired');
-          // Could trigger logout here
+          console.error('🔒 Unauthorized - session invalid or expired');
+
+          // Check if it's a "login_required" error from Auth0
+          if (data?.error === 'login_required' ||
+              data?.message?.includes('login_required')) {
+
+            console.log('🚪 Auth0 session expired - dispatching logout event');
+
+            // Dispatch logout event for AuthGuard to handle
+            window.dispatchEvent(new CustomEvent('auth:logout', {
+              detail: { reason: 'auth0_session_expired' }
+            }));
+          }
           break;
+
         case 403:
-          console.error('Forbidden - insufficient permissions');
+          console.error('🚫 Forbidden - insufficient permissions');
           break;
         case 404:
           console.error('Resource not found');

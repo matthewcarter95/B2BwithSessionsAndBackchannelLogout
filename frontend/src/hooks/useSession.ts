@@ -63,7 +63,8 @@ export interface Auth0Session {
  * Fetch all sessions for a user from Lambda Function URL
  */
 export function useSessions(userId?: string) {
-  const { isAuthenticated, getAccessTokenSilently } = useAuth0();
+  const { isAuthenticated, getAccessTokenSilently, getIdTokenClaims, logout } = useAuth0();
+  const queryClient = useQueryClient();
 
   return useQuery({
     queryKey: ['sessions', userId],
@@ -97,11 +98,47 @@ export function useSessions(userId?: string) {
       );
       console.log('Mapped sessions:', sessions);
 
+      // *** NEW: Check if current session exists ***
+      const idToken = await getIdTokenClaims();
+      const currentSid = idToken?.sid;
+
+      if (currentSid) {
+        // Check if current session is in the returned list
+        const currentSessionExists = sessions.some(
+          (session: Session) => session.sid === currentSid
+        );
+
+        if (!currentSessionExists) {
+          console.error('❌ Current session not found in backend - likely deleted by backchannel logout');
+          console.log('Current sid:', currentSid);
+          console.log('Available sessions:', sessions.map(s => s.sid));
+
+          // Current session has been deleted (backchannel logout or expired)
+          // Clear cache and logout
+          queryClient.clear();
+
+          // Logout and redirect to login
+          logout({
+            logoutParams: {
+              returnTo: window.location.origin + '?reason=session_expired',
+            },
+          });
+
+          // Throw error to stop query processing
+          throw new Error('Current session deleted - backchannel logout detected');
+        } else {
+          console.log('✅ Current session validated:', currentSid);
+        }
+      } else {
+        console.warn('⚠️  No sid in ID token - cannot validate current session');
+      }
+
       return sessions;
     },
     enabled: isAuthenticated && !!userId && !!LAMBDA_FUNCTION_URL,
     staleTime: 5 * 1000, // 5 seconds
     refetchInterval: 30 * 1000, // Auto-refetch every 30 seconds
+    retry: false, // Don't retry if session deleted
   });
 }
 

@@ -36,12 +36,35 @@ export default function SessionList() {
   }
 
   if (error) {
+    // Check if error is due to session deletion (backchannel logout)
+    const errorMessage = (error as Error).message;
+    const isSessionDeleted = errorMessage.includes('session deleted') ||
+                            errorMessage.includes('backchannel logout');
+
+    if (isSessionDeleted) {
+      return (
+        <div className="card">
+          <h2>Session Ended</h2>
+          <div className="error">
+            <h3>🔒 Your session has been terminated</h3>
+            <p>
+              Your session was ended remotely (logout from another device or administrator action).
+            </p>
+            <p>
+              You will be redirected to login shortly...
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    // Other errors
     return (
       <div className="card">
         <h2>Your Sessions</h2>
         <div className="error">
           <h3>Failed to Load Sessions</h3>
-          <p>{(error as Error).message}</p>
+          <p>{errorMessage}</p>
           <button onClick={() => refetch()} style={{ marginTop: '1rem' }}>
             Retry
           </button>
