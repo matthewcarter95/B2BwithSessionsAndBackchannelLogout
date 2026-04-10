@@ -22,10 +22,10 @@ export const handler = async (event: any) => {
   console.log('Event:', JSON.stringify(event, null, 2));
 
   try {
-    // Extract userId from query parameters
-    const userId = event.queryStringParameters?.userId;
+    // Extract userId from query parameters (with URL decoding)
+    const rawUserId = event.queryStringParameters?.user_id;
 
-    if (!userId) {
+    if (!rawUserId) {
       return {
         statusCode: 400,
         headers: {
@@ -35,46 +35,120 @@ export const handler = async (event: any) => {
         },
         body: JSON.stringify({
           error: 'invalid_request',
-          message: 'userId query parameter is required',
+          message: 'user_id query parameter is required',
         }),
       };
     }
 
+    // Decode URL-encoded userId (handles auth0|xxx format)
+    const userId = decodeURIComponent(rawUserId);
     console.log('Querying sessions for userId:', userId);
 
     // Query DynamoDB GSI
     const now = Math.floor(Date.now() / 1000);
+    const IDLE_TIMEOUT_SECONDS = 15 * 60; // 15 minutes
+
     const command = new QueryCommand({
       TableName: TABLE_NAME,
-      IndexName: 'userId-expiresAt-index',
-      KeyConditionExpression: 'userId = :userId AND expiresAt > :now',
+      IndexName: 'user_id-index',
+      KeyConditionExpression: 'user_id = :userId',
       ExpressionAttributeValues: {
         ':userId': { S: userId },
-        ':now': { N: now.toString() },
       },
       ScanIndexForward: false, // Sort descending (newest first)
-      Limit: 20,
     });
 
     const response = await dynamoClient.send(command);
+    const items = response.Items || [];
 
-    // Parse sessions
-    const sessions: Session[] = (response.Items || []).map((item) => {
-      const session = unmarshall(item) as Session;
-      // Sanitize - don't include full sessionData
+    console.log(`Found ${items.length} total sessions in DB for user ${userId}`);
+
+    if (items.length === 0) {
       return {
-        sid: session.sid,
-        userId: session.userId,
-        email: session.email,
-        loginTime: session.loginTime,
-        expiresAt: session.expiresAt,
-        lastActivityAt: session.lastActivityAt,
-        ipAddress: session.ipAddress,
-        userAgent: session.userAgent,
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        },
+        body: JSON.stringify({
+          success: true,
+          count: 0,
+          sessions: [],
+        }),
       };
+    }
+
+    // Parse all sessions and filter out expired ones
+    const allSessions = items.map((item) => unmarshall(item));
+    const activeSessions = allSessions.filter((session: any) => {
+      const expired = session.expires_at && session.expires_at < now;
+      if (expired) {
+        console.log(`Session ${session.session_id} is expired (expires_at: ${session.expires_at}, now: ${now})`);
+      }
+      return !expired;
     });
 
-    console.log(`Found ${sessions.length} sessions for user ${userId}`);
+    console.log(`${activeSessions.length} sessions are not expired`);
+
+    if (activeSessions.length === 0) {
+      console.log('All sessions expired');
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        },
+        body: JSON.stringify({
+          success: true,
+          count: 0,
+          sessions: [],
+        }),
+      };
+    }
+
+    // Find most recent login time (for sliding idle timeout)
+    const mostRecentLoginTime = Math.max(
+      ...activeSessions.map((s: any) => s.login_time || s.last_activity || 0)
+    );
+
+    const idleSeconds = now - mostRecentLoginTime;
+    console.log(`Most recent login: ${mostRecentLoginTime}, idle for: ${idleSeconds}s (${Math.floor(idleSeconds / 60)}m)`);
+
+    // Check sliding idle timeout
+    if (idleSeconds > IDLE_TIMEOUT_SECONDS) {
+      console.log(`User idle timeout exceeded (${Math.floor(idleSeconds / 60)}m > 15m) - returning empty list`);
+      return {
+        statusCode: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        },
+        body: JSON.stringify({
+          success: true,
+          count: 0,
+          sessions: [],
+          idle_timeout: true,
+        }),
+      };
+    }
+
+    // Return active sessions (sanitized)
+    const sessions = activeSessions.map((session: any) => ({
+      session_id: session.session_id,
+      user_id: session.user_id,
+      email: session.email,
+      login_time: session.login_time,
+      expires_at: session.expires_at,
+      last_activity: session.last_activity,
+      status: session.status,
+      ip_address: session.ip_address,
+      user_agent: session.user_agent,
+    }));
+
+    console.log(`Returning ${sessions.length} active sessions`);
 
     return {
       statusCode: 200,

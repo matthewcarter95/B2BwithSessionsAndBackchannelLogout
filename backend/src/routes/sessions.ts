@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { getSessionInfo } from '../services/auth0Service';
-import { listSessionsByUserId, getSession } from '../services/sessionService';
+import { listSessionsByUserId, getSession, createSession } from '../services/sessionService';
 
 const router = Router();
 

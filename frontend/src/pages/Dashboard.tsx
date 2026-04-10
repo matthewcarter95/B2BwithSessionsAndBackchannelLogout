@@ -1,11 +1,25 @@
 import { Routes, Route, Link, Navigate } from 'react-router-dom';
 import { useAuth0 } from '@auth0/auth0-react';
+import { useEffect } from 'react';
 import Profile from '../components/Profile';
 import SessionList from '../components/SessionList';
 import SessionDetail from '../components/SessionDetail';
+import { useSessions } from '../hooks/useSession';
 
 export default function Dashboard() {
   const { user, logout } = useAuth0();
+
+  // Start session polling globally (monitors for backchannel logout)
+  // This runs regardless of which page user is on
+  useSessions(user?.sub);
+
+  // Log when polling starts
+  useEffect(() => {
+    if (user?.sub) {
+      console.log('🔄 Global session polling started for user:', user.sub);
+      console.log('📡 Polling every 30 seconds to detect backchannel logout');
+    }
+  }, [user?.sub]);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
